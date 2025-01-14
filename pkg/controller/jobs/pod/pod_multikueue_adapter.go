@@ -32,7 +32,6 @@ import (
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
-	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/util/api"
 	clientutil "sigs.k8s.io/kueue/pkg/util/client"
 )
@@ -58,23 +57,16 @@ func (b *multikueueAdapter) SyncJob(ctx context.Context, localClient client.Clie
 
 	// the remote pod exists
 	if err == nil {
-		if FromObject(&localPod).IsSuspended() {
-			// Ensure the pod is unsuspended before updating its status; otherwise, it will fail when patching the spec.
-			log.V(2).Info("Skipping the sync since the local pod is still suspended")
+		if localPod.DeletionTimestamp != nil {
+			// Ensure the local pod is not terminating before updating its status; otherwise, it will fail when patching the status.
+			log.V(2).Info("Skipping the sync since the local pod is terminating")
 			return nil
 		}
-
-		remoteFinished := false
-		if remotePod.Status.Phase == corev1.PodSucceeded || remotePod.Status.Phase == corev1.PodFailed {
-			remoteFinished = true
-		}
-		if remoteFinished {
-			return clientutil.PatchStatus(ctx, localClient, &localPod, func() (bool, error) {
-				localPod.Status = remotePod.Status
-				return true, nil
-			})
-		}
-		return nil
+		// Patch the status of the local pod to match the remote pod
+		return clientutil.PatchStatus(ctx, localClient, &localPod, func() (bool, error) {
+			localPod.Status = remotePod.Status
+			return true, nil
+		})
 	}
 
 	remotePod = corev1.Pod{
@@ -102,7 +94,7 @@ func (b *multikueueAdapter) DeleteRemoteObject(ctx context.Context, remoteClient
 }
 
 func (b *multikueueAdapter) KeepAdmissionCheckPending() bool {
-	return !features.Enabled(features.MultiKueueBatchJobWithManagedBy)
+	return true
 }
 
 func (b *multikueueAdapter) IsJobManagedByKueue(ctx context.Context, c client.Client, key types.NamespacedName) (bool, string, error) {
